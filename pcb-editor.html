@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>PCB Editor — 5V LED Project</title>
+<style>
+  :root {
+    --bg: #1c1c1c;
+    --panel: #2a2a2a;
+    --text: #e8e8e8;
+    --accent: #4fc3f7;
+    --ok: #5bd76b;
+    --bad: #ff6363;
+    --pad: #f3c248;
+    --copper: #d4a017;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); overflow: hidden; user-select: none; }
+  #app { display: grid; grid-template-columns: 240px 1fr 260px; height: 100vh; }
+  .panel { background: var(--panel); padding: 12px; overflow-y: auto; border-right: 1px solid #111; }
+  .panel:last-child { border-right: none; border-left: 1px solid #111; }
+  h1 { font-size: 14px; margin: 0 0 6px; color: var(--accent); }
+  h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--accent); margin: 14px 0 6px; }
+  .comp {
+    background: #333; padding: 8px 10px; margin-bottom: 5px; border-radius: 5px;
+    cursor: grab; font-size: 12.5px; border: 1px solid #444;
+  }
+  .comp:hover { background: #3d3d3d; border-color: var(--accent); }
+  .comp:active { cursor: grabbing; }
+  .comp small { display: block; color: #999; font-size: 10.5px; margin-top: 2px; }
+  .comp.placed { opacity: 0.4; cursor: not-allowed; }
+  #stage-wrap { position: relative; background: #050505; overflow: hidden; }
+  svg.stage { display: block; width: 100%; height: 100%; }
+  button {
+    background: #333; color: var(--text); border: 1px solid #555; padding: 6px 10px;
+    border-radius: 4px; cursor: pointer; font-size: 12px; width: 100%; margin-bottom: 4px;
+  }
+  button:hover { background: #444; border-color: var(--accent); }
+  button.active { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+  .tool-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 6px; }
+  .tool-grid button { margin-bottom: 0; }
+  .info { font-size: 11.5px; color: #bbb; line-height: 1.5; }
+  .info p { margin: 3px 0; }
+  kbd { background:#444; padding:1px 5px; border-radius:3px; font-size:10.5px; }
+  #status { position: absolute; bottom: 0; left: 0; right: 0; padding: 5px 10px; background: #000c; font-size: 12px; color: #9ad; font-family: monospace; }
+  .net-pill { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10.5px; font-family: monospace; margin-right: 3px; cursor: pointer; border: 1px solid transparent; }
+  .net-pill.active { border-color: #fff; }
+  hr { border: none; border-top: 1px solid #444; margin: 10px 0; }
+
+  /* SVG element styles */
+  .pad { cursor: crosshair; }
+  .pad:hover, .pad.hi { stroke: #fff !important; stroke-width: 3 !important; }
+  .pad.start { stroke: var(--accent) !important; stroke-width: 3 !important; }
+  .pad-label { fill: #fff; font-size: 8px; pointer-events: none; text-anchor: middle; font-family: sans-serif; }
+  .comp-label { fill: #fff; font-size: 9px; pointer-events: none; text-anchor: middle; font-family: monospace; }
+  .comp-body { cursor: move; }
+  .component-group.selected .selectable-body { stroke: var(--accent) !important; stroke-width: 2.5 !important; }
+  .trace { fill: none; stroke-linecap: round; stroke-linejoin: round; cursor: pointer; }
+  .trace:hover { filter: brightness(1.3) drop-shadow(0 0 3px #fff); }
+  .trace.selected { filter: drop-shadow(0 0 4px #fff); }
+  .trace.preview { stroke-dasharray: 4 3; opacity: 0.8; pointer-events: none; }
+  .vp { cursor: pointer; }
+  .vp:hover { stroke: #fff !important; stroke-width: 2 !important; }
+  .vp.selected { stroke: var(--accent) !important; stroke-width: 2.5 !important; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- LEFT : material list -->
+  <div class="panel">
+    <h1>Material list</h1>
+    <div class="info"><p>Drag onto the board.</p></div>
+    <h2>Components</h2>
+    <div id="materials"></div>
+    <hr/>
+    <h2>Add connection point</h2>
+    <button id="add-vp-btn">+ Connection point</button>
+    <div class="info"><p>Then click on the board to place. Use these as routing waypoints / test points.</p></div>
+    <hr/>
+    <h2>Net (wire color)</h2>
+    <div id="net-picker"></div>
+    <div class="info"><p>Active net is used for new traces. Click a net pill to change.</p></div>
+  </div>
+
+  <!-- CENTER : board -->
+  <div id="stage-wrap">
+    <svg class="stage" id="stage" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <radialGradient id="pcbTex" cx="50%" cy="50%" r="70%">
+          <stop offset="0%" stop-color="#0e7a44"/>
+          <stop offset="100%" stop-color="#064c28"/>
+        </radialGradient>
+        <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+          <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#0a4d29" stroke-width="0.5"/>
+        </pattern>
+      </defs>
+      <!-- Blank PCB -->
+      <rect id="board" x="40" y="40" width="1120" height="720" rx="14" fill="url(#pcbTex)" stroke="#000" stroke-width="2"/>
+      <rect x="40" y="40" width="1120" height="720" rx="14" fill="url(#grid)" pointer-events="none"/>
+      <!-- mounting holes -->
+      <g id="holes">
+        <circle cx="65"  cy="65"  r="7" fill="#222" stroke="#888"/>
+        <circle cx="1135" cy="65"  r="7" fill="#222" stroke="#888"/>
+        <circle cx="65"  cy="735" r="7" fill="#222" stroke="#888"/>
+        <circle cx="1135" cy="735" r="7" fill="#222" stroke="#888"/>
+        <circle cx="65"  cy="65"  r="3" fill="#050505"/>
+        <circle cx="1135" cy="65"  r="3" fill="#050505"/>
+        <circle cx="65"  cy="735" r="3" fill="#050505"/>
+        <circle cx="1135" cy="735" r="3" fill="#050505"/>
+      </g>
+      <!-- Drawing layers -->
+      <g id="traces-layer"></g>
+      <g id="components-layer"></g>
+      <g id="vp-layer"></g>
+      <g id="overlay-layer"></g>
+    </svg>
+    <div id="status">Ready.</div>
+  </div>
+
+  <!-- RIGHT : tools -->
+  <div class="panel">
+    <h1>Tools</h1>
+    <div class="tool-grid">
+      <button class="tool active" data-tool="select">Select</button>
+      <button class="tool" data-tool="wire">Wire</button>
+    </div>
+    <button id="undo-btn">↶ Undo</button>
+    <button id="clear-btn">Clear board</button>
+    <hr/>
+    <h2>Keys</h2>
+    <div class="info">
+      <p><kbd>W</kbd> wire tool · <kbd>S</kbd> select</p>
+      <p><kbd>R</kbd> rotate selected component</p>
+      <p><kbd>Del</kbd> delete selected</p>
+      <p><kbd>Esc</kbd> cancel current wire</p>
+      <p>While wiring: click pads / connection points to chain, click empty board to drop a corner.</p>
+    </div>
+    <hr/>
+    <h2>Selection</h2>
+    <div class="info" id="sel-info">Nothing selected.</div>
+    <hr/>
+    <h2>Net list</h2>
+    <div class="info" id="netlist">No traces yet.</div>
+    <hr/>
+    <h2>Export</h2>
+    <button id="export-svg">Download SVG</button>
+    <button id="export-json">Download JSON</button>
+    <button id="import-json">Load JSON…</button>
+    <input type="file" id="file-input" accept="application/json" style="display:none"/>
+  </div>
+</div>
+
+<script>
+(() => {
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const stage = document.getElementById('stage');
+  const compLayer = document.getElementById('components-layer');
+  const traceLayer = document.getElementById('traces-layer');
+  const vpLayer = document.getElementById('vp-layer');
+  const overlay = document.getElementById('overlay-layer');
+  const status = document.getElementById('status');
+  const selInfo = document.getElementById('sel-info');
+  const netlistDiv = document.getElementById('netlist');
+
+  const GRID = 10;
+  const BOARD = { x: 40, y: 40, w: 1120, h: 720 };
+
+  // ===== Component definitions =====
+  const DEFS = {
+    cob: {
+      label: 'COB-LED', w: 160, h: 30, shape: 'rect', fill: '#fff4b0',
+      pads: [
+        { name: '+',   dx: -70, dy: 0, kind: 'pos' },
+        { name: 'GND', dx:  70, dy: 0, kind: 'neg' },
+      ]
+    },
+    ledkit: {
+      label: '5V LED', w: 60, h: 60, shape: 'circle', fill: '#ff5555',
+      pads: [
+        { name: 'LIVE', dx: -28, dy: 0,  kind: 'pos' },
+        { name: 'GND',  dx:  28, dy: 0,  kind: 'neg' },
+      ]
+    },
+    button: {
+      label: 'PUSH', w: 100, h: 100, shape: 'circle-btn', fill: '#888',
+      pads: [
+        { name: 'SW1',  dx: -45, dy: -20, kind: 'sw' },
+        { name: 'SW2',  dx:  45, dy: -20, kind: 'sw' },
+        { name: 'LED+', dx: -20, dy:  45, kind: 'pos' },
+        { name: 'LED-', dx:  20, dy:  45, kind: 'neg' },
+      ]
+    },
+    usbc: {
+      label: 'USB-C 5V/3A', w: 110, h: 45, shape: 'usbc', fill: '#1a1a1a',
+      pads: [
+        { name: '5V',  dx: -30, dy: 12, kind: 'pos' },
+        { name: 'GND', dx:  30, dy: 12, kind: 'neg' },
+      ]
+    },
+  };
+
+  // ===== Material list (limited quantities) =====
+  const MATERIALS = [
+    { type: 'cob',    label: '5V COB LED Strip',          desc: '+ / GND pads',     id: 'cob-1' },
+    { type: 'cob',    label: '5V COB LED Strip',          desc: '+ / GND pads',     id: 'cob-2' },
+    { type: 'ledkit', label: '5V LED Kit',                desc: 'Live / GND',       id: 'led-1' },
+    { type: 'ledkit', label: '5V LED Kit',                desc: 'Live / GND',       id: 'led-2' },
+    { type: 'button', label: 'Push Button (5V LED)',      desc: 'SW1/SW2/LED±',     id: 'btn-1' },
+    { type: 'usbc',   label: 'USB-C 5V/3A Female',        desc: '5V / GND',         id: 'usb-1' },
+  ];
+
+  // ===== Nets =====
+  const NETS = [
+    { name: '5V_IN', color: '#e54545' },
+    { name: 'SW',    color: '#d4a017' },
+    { name: 'GND',   color: '#3a7fbf' },
+    { name: 'NET4',  color: '#9b59b6' },
+    { name: 'NET5',  color: '#1abc9c' },
+  ];
+  let activeNet = '5V_IN';
+
+  // ===== State =====
+  let nextId = 1;
+  const uid = () => 'i' + (nextId++);
+  let components = []; // {id, type, materialId, x, y, rot, pads:[{id,name,kind,dx,dy}], el}
+  let traces = [];     // {id, net, points:[{x,y}], endpoints:[ref,ref], el}  ref: {kind:'pad'|'vp', id}
+  let vps = [];        // {id, x, y, net, el} connection points
+  let selected = null;
+  let tool = 'select';
+  let placingVp = false;
+
+  // wiring state
+  let wireActive = null; // { points: [{x,y}], startRef, lastPoint, previewEl }
+  let dragState = null;  // moving a component or vp
+
+  const undoStack = [];
+  const pushUndo = () => {
+    undoStack.push(serialize());
+    if (undoStack.length > 50) undoStack.shift();
+  };
+
+  // ===== Helpers =====
+  const snap = v => Math.round(v / GRID) * GRID;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+  function svgPt(evt) {
+    const pt = stage.createSVGPoint();
+    pt.x = evt.clientX; pt.y = evt.clientY;
+    return pt.matrixTransform(stage.getScreenCTM().inverse());
+  }
+  function boardSnap(p) {
+    return {
+      x: clamp(snap(p.x), BOARD.x, BOARD.x + BOARD.w),
+      y: clamp(snap(p.y), BOARD.y, BOARD.y + BOARD.h),
+    };
+  }
+  function setStatus(s) { status.textContent = s; }
+
+  function netColor(n) { return (NETS.find(x => x.name === n) || NETS[0]).color; }
+  function refPos(ref) {
+    if (ref.kind === 'pad') {
+      const c = components.find(c => c.id === ref.compId);
+      const pad = c.pads.find(p => p.id === ref.padId);
+      const rad = c.rot * Math.PI / 180, cos = Math.cos(rad), sin = Math.sin(rad);
+      return { x: c.x + pad.dx * cos - pad.dy * sin, y: c.y + pad.dx * sin + pad.dy * cos };
+    }
+    if (ref.kind === 'vp') {
+      const v = vps.find(v => v.id === ref.vpId);
+      return { x: v.x, y: v.y };
+    }
+    return null;
+  }
+
+  // ===== Materials palette =====
+  const matsDiv = document.getElementById('materials');
+  function renderMaterials() {
+    matsDiv.innerHTML = '';
+    MATERIALS.forEach(m => {
+      const placed = components.some(c => c.materialId === m.id);
+      const el = document.createElement('div');
+      el.className = 'comp' + (placed ? ' placed' : '');
+      el.draggable = !placed;
+      el.dataset.materialId = m.id;
+      el.dataset.type = m.type;
+      el.innerHTML = `${m.label}<small>${m.desc}${placed ? ' — placed' : ''}</small>`;
+      el.addEventListener('dragstart', e => {
+        if (placed) { e.preventDefault(); return; }
+        e.dataTransfer.setData('text/plain', JSON.stringify({ type: m.type, materialId: m.id }));
+      });
+      matsDiv.appendChild(el);
+    });
+  }
+  renderMaterials();
+
+  // ===== Net picker =====
+  const netPicker = document.getElementById('net-picker');
+  function renderNetPicker() {
+    netPicker.innerHTML = '';
+    NETS.forEach(n => {
+      const pill = document.createElement('span');
+      pill.className = 'net-pill' + (n.name === activeNet ? ' active' : '');
+      pill.style.background = n.color;
+      pill.style.color = '#fff';
+      pill.textContent = n.name;
+      pill.addEventListener('click', () => { activeNet = n.name; renderNetPicker(); setStatus('Active net: ' + activeNet); });
+      netPicker.appendChild(pill);
+    });
+  }
+  renderNetPicker();
+
+  // ===== Component rendering =====
+  function renderComponent(c) {
+    if (c.el) c.el.remove();
+    const def = DEFS[c.type];
+    const g = document.createElementNS(SVGNS, 'g');
+    g.setAttribute('class', 'component-group');
+    g.setAttribute('transform', `translate(${c.x},${c.y}) rotate(${c.rot})`);
+    g.dataset.compId = c.id;
+
+    // body
+    let body;
+    if (def.shape === 'circle') {
+      body = document.createElementNS(SVGNS, 'circle');
+      body.setAttribute('r', def.w/2);
+      body.setAttribute('fill', def.fill);
+      body.setAttribute('stroke', '#222'); body.setAttribute('stroke-width', '1');
+    } else if (def.shape === 'circle-btn') {
+      const ring = document.createElementNS(SVGNS, 'circle');
+      ring.setAttribute('r', def.w/2); ring.setAttribute('fill','#888'); ring.setAttribute('stroke','#333'); ring.setAttribute('stroke-width','2');
+      g.appendChild(ring);
+      body = document.createElementNS(SVGNS, 'circle');
+      body.setAttribute('r', def.w/2 - 8);
+      body.setAttribute('fill', '#2a4f7a'); body.setAttribute('stroke','#1a2f4a'); body.setAttribute('stroke-width','1.5');
+    } else if (def.shape === 'usbc') {
+      body = document.createElementNS(SVGNS, 'rect');
+      body.setAttribute('x', -def.w/2); body.setAttribute('y', -def.h/2);
+      body.setAttribute('width', def.w); body.setAttribute('height', def.h);
+      body.setAttribute('rx', 6);
+      body.setAttribute('fill', def.fill); body.setAttribute('stroke', '#666'); body.setAttribute('stroke-width','1.5');
+      const slot = document.createElementNS(SVGNS, 'rect');
+      slot.setAttribute('x', -def.w/2 + 12); slot.setAttribute('y', -def.h/2 + 7);
+      slot.setAttribute('width', def.w - 24); slot.setAttribute('height', def.h - 22);
+      slot.setAttribute('rx', 4); slot.setAttribute('fill', '#0a0a0a');
+      g.appendChild(slot);
+    } else {
+      body = document.createElementNS(SVGNS, 'rect');
+      body.setAttribute('x', -def.w/2); body.setAttribute('y', -def.h/2);
+      body.setAttribute('width', def.w); body.setAttribute('height', def.h);
+      body.setAttribute('rx', 3);
+      body.setAttribute('fill', def.fill); body.setAttribute('stroke', '#444');
+    }
+    body.classList.add('comp-body', 'selectable-body');
+    g.appendChild(body);
+
+    // COB diodes flair
+    if (c.type === 'cob') {
+      for (let i = 0; i < 9; i++) {
+        const dot = document.createElementNS(SVGNS,'circle');
+        dot.setAttribute('cx', -60 + i*15); dot.setAttribute('cy', 0); dot.setAttribute('r', 2);
+        dot.setAttribute('fill', '#ffd700'); dot.setAttribute('opacity', '0.5');
+        dot.setAttribute('pointer-events','none');
+        g.appendChild(dot);
+      }
+    }
+
+    // component label above
+    const lbl = document.createElementNS(SVGNS, 'text');
+    lbl.setAttribute('class', 'comp-label');
+    lbl.setAttribute('y', -def.h/2 - 6);
+    lbl.textContent = def.label + ' #' + c.id.replace('i','');
+    g.appendChild(lbl);
+
+    // pads
+    c.pads.forEach(p => {
+      const pad = document.createElementNS(SVGNS, 'circle');
+      pad.setAttribute('class', 'pad');
+      pad.setAttribute('cx', p.dx); pad.setAttribute('cy', p.dy); pad.setAttribute('r', 5);
+      pad.setAttribute('fill', 'var(--pad)');
+      pad.setAttribute('stroke', p.kind === 'pos' ? '#c00' : p.kind === 'neg' ? '#06f' : '#333');
+      pad.setAttribute('stroke-width', '2');
+      pad.dataset.padId = p.id; pad.dataset.compId = c.id;
+      g.appendChild(pad);
+      const t = document.createElementNS(SVGNS, 'text');
+      t.setAttribute('class', 'pad-label');
+      t.setAttribute('x', p.dx); t.setAttribute('y', p.dy + (p.dy < 0 ? -8 : 14));
+      t.textContent = p.name;
+      g.appendChild(t);
+    });
+
+    compLayer.appendChild(g);
+    c.el = g;
+  }
+
+  function renderVp(v) {
+    if (v.el) v.el.remove();
+    const g = document.createElementNS(SVGNS, 'g');
+    g.dataset.vpId = v.id;
+    const outer = document.createElementNS(SVGNS, 'circle');
+    outer.setAttribute('class','vp');
+    outer.setAttribute('cx', v.x); outer.setAttribute('cy', v.y); outer.setAttribute('r', 6);
+    outer.setAttribute('fill', '#222');
+    outer.setAttribute('stroke', netColor(v.net));
+    outer.setAttribute('stroke-width', '2');
+    outer.dataset.vpId = v.id;
+    g.appendChild(outer);
+    const inner = document.createElementNS(SVGNS, 'circle');
+    inner.setAttribute('cx', v.x); inner.setAttribute('cy', v.y); inner.setAttribute('r', 2);
+    inner.setAttribute('fill', netColor(v.net));
+    inner.setAttribute('pointer-events','none');
+    g.appendChild(inner);
+    vpLayer.appendChild(g);
+    v.el = g;
+  }
+
+  function renderTrace(t) {
+    if (t.el) t.el.remove();
+    const pts = t.points.map(p => `${p.x} ${p.y}`).join(' L ');
+    const path = document.createElementNS(SVGNS, 'path');
+    path.setAttribute('class', 'trace');
+    path.setAttribute('d', 'M ' + pts);
+    path.setAttribute('stroke', netColor(t.net));
+    path.setAttribute('stroke-width', '4');
+    path.dataset.traceId = t.id;
+    traceLayer.appendChild(path);
+    t.el = path;
+  }
+
+  function rerouteForComponent(c) {
+    // re-snap endpoint coords of traces whose endpoints are this component's pads
+    traces.forEach(t => {
+      let changed = false;
+      t.endpoints.forEach((ref, i) => {
+        if (ref && ref.kind === 'pad' && ref.compId === c.id) {
+          const np = refPos(ref);
+          const idx = i === 0 ? 0 : t.points.length - 1;
+          t.points[idx] = np;
+          changed = true;
+        }
+      });
+      if (changed) renderTrace(t);
+    });
+  }
+  function rerouteForVp(v) {
+    traces.forEach(t => {
+      let changed = false;
+      t.endpoints.forEach((ref, i) => {
+        if (ref && ref.kind === 'vp' && ref.vpId === v.id) {
+          const idx = i === 0 ? 0 : t.points.length - 1;
+          t.points[idx] = { x: v.x, y: v.y };
+          changed = true;
+        }
+      });
+      if (changed) renderTrace(t);
+    });
+  }
+
+  // ===== Selection =====
+  function clearSelection() {
+    if (!selected) return;
+    if (selected.kind === 'component') selected.thing.el.classList.remove('selected');
+    if (selected.kind === 'trace') selected.thing.el.classList.remove('selected');
+    if (selected.kind === 'vp') selected.thing.el.querySelector('.vp').classList.remove('selected');
+    selected = null;
+    selInfo.innerHTML = 'Nothing selected.';
+  }
+  function selectComponent(c) {
+    clearSelection();
+    selected = { kind: 'component', thing: c };
+    c.el.classList.add('selected');
+    selInfo.innerHTML = `<b>${DEFS[c.type].label}</b> #${c.id.replace('i','')}<br>pos: ${c.x}, ${c.y}<br>rot: ${c.rot}°<br><i>R rotate · Del remove</i>`;
+  }
+  function selectTrace(t) {
+    clearSelection();
+    selected = { kind: 'trace', thing: t };
+    t.el.classList.add('selected');
+    selInfo.innerHTML = `<b>Trace</b><br>net: <span class="net-pill" style="background:${netColor(t.net)};color:#fff">${t.net}</span><br>${t.points.length-1} segments<br><i>Del remove</i>`;
+  }
+  function selectVp(v) {
+    clearSelection();
+    selected = { kind: 'vp', thing: v };
+    v.el.querySelector('.vp').classList.add('selected');
+    selInfo.innerHTML = `<b>Connection point</b><br>net: ${v.net}<br>pos: ${v.x}, ${v.y}<br><i>Del remove</i>`;
+  }
+
+  // ===== Toolbar =====
+  document.querySelectorAll('button.tool').forEach(b => {
+    b.addEventListener('click', () => setTool(b.dataset.tool));
+  });
+  function setTool(t) {
+    tool = t; placingVp = false; cancelWire();
+    document.querySelectorAll('button.tool').forEach(b => b.classList.toggle('active', b.dataset.tool === t));
+    setStatus(t === 'wire' ? 'Wire tool: click a pad/connection point to start. Clicks on empty board add corners.' : 'Select tool.');
+  }
+
+  document.getElementById('add-vp-btn').addEventListener('click', () => {
+    placingVp = true; setStatus('Click on the board to place a connection point.');
+  });
+
+  document.getElementById('undo-btn').addEventListener('click', undo);
+  document.getElementById('clear-btn').addEventListener('click', () => {
+    if (!confirm('Clear board?')) return;
+    pushUndo();
+    components.forEach(c => c.el.remove()); components = [];
+    traces.forEach(t => t.el.remove()); traces = [];
+    vps.forEach(v => v.el.remove()); vps = [];
+    clearSelection(); renderMaterials(); updateNetlist();
+    setStatus('Cleared.');
+  });
+
+  // ===== Drag from palette =====
+  stage.addEventListener('dragover', e => e.preventDefault());
+  stage.addEventListener('drop', e => {
+    e.preventDefault();
+    let data;
+    try { data = JSON.parse(e.dataTransfer.getData('text/plain')); } catch { return; }
+    if (!data || !data.type) return;
+    if (components.some(c => c.materialId === data.materialId)) { setStatus('Already placed.'); return; }
+    pushUndo();
+    const p = boardSnap(svgPt(e));
+    const def = DEFS[data.type];
+    const c = {
+      id: uid(), type: data.type, materialId: data.materialId,
+      x: p.x, y: p.y, rot: 0,
+      pads: def.pads.map(pd => ({ ...pd, id: uid() })),
+    };
+    components.push(c); renderComponent(c); renderMaterials();
+    setStatus(`Placed ${def.label}.`);
+  });
+
+  // ===== Stage mouse handling =====
+  stage.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    const padEl = e.target.closest('.pad');
+    const vpEl = e.target.closest('.vp');
+    const compEl = e.target.closest('.component-group');
+    const traceEl = e.target.closest('.trace');
+    const p = boardSnap(svgPt(e));
+
+    // place vp
+    if (placingVp) {
+      pushUndo();
+      const v = { id: uid(), x: p.x, y: p.y, net: activeNet };
+      vps.push(v); renderVp(v);
+      placingVp = false;
+      setStatus('Connection point placed.');
+      return;
+    }
+
+    // wire tool
+    if (tool === 'wire') {
+      if (padEl) {
+        const compId = padEl.dataset.compId, padId = padEl.dataset.padId;
+        const c = components.find(x => x.id === compId);
+        const pad = c.pads.find(x => x.id === padId);
+        const pos = refPos({ kind: 'pad', compId, padId });
+        if (!wireActive) {
+          beginWire({ kind: 'pad', compId, padId }, pos, padEl);
+        } else {
+          finishWire({ kind: 'pad', compId, padId }, pos);
+        }
+        return;
+      }
+      if (vpEl) {
+        const vpId = vpEl.dataset.vpId;
+        const v = vps.find(x => x.id === vpId);
+        if (!wireActive) {
+          beginWire({ kind: 'vp', vpId }, { x: v.x, y: v.y }, vpEl);
+        } else {
+          finishWire({ kind: 'vp', vpId }, { x: v.x, y: v.y });
+        }
+        return;
+      }
+      // empty board click = add corner
+      if (wireActive) {
+        addWireCorner(p);
+      }
+      return;
+    }
+
+    // select tool
+    if (tool === 'select') {
+      if (padEl) {
+        // start a wire immediately even in select mode for convenience
+        setTool('wire');
+        stage.dispatchEvent(new MouseEvent('mousedown', e));
+        return;
+      }
+      if (traceEl) {
+        const t = traces.find(x => x.id === traceEl.dataset.traceId);
+        selectTrace(t); return;
+      }
+      if (vpEl) {
+        const v = vps.find(x => x.id === vpEl.dataset.vpId);
+        selectVp(v);
+        dragState = { kind: 'vp', vp: v, dx: p.x - v.x, dy: p.y - v.y };
+        return;
+      }
+      if (compEl) {
+        const c = components.find(x => x.id === compEl.dataset.compId);
+        selectComponent(c);
+        dragState = { kind: 'comp', comp: c, dx: p.x - c.x, dy: p.y - c.y };
+        return;
+      }
+      clearSelection();
+    }
+  });
+
+  stage.addEventListener('mousemove', e => {
+    const p = boardSnap(svgPt(e));
+    if (dragState) {
+      if (dragState.kind === 'comp') {
+        dragState.comp.x = p.x - dragState.dx;
+        dragState.comp.y = p.y - dragState.dy;
+        dragState.comp.el.setAttribute('transform', `translate(${dragState.comp.x},${dragState.comp.y}) rotate(${dragState.comp.rot})`);
+        rerouteForComponent(dragState.comp);
+      } else if (dragState.kind === 'vp') {
+        dragState.vp.x = p.x - dragState.dx;
+        dragState.vp.y = p.y - dragState.dy;
+        renderVp(dragState.vp);
+        rerouteForVp(dragState.vp);
+      }
+    }
+    if (wireActive) {
+      updateWirePreview(p);
+    }
+  });
+
+  stage.addEventListener('mouseup', () => { dragState = null; });
+
+  // ===== Wiring =====
+  function beginWire(startRef, startPos, padEl) {
+    pushUndo();
+    wireActive = {
+      startRef,
+      points: [startPos],
+      previewEl: null,
+      startEl: padEl,
+    };
+    if (padEl) padEl.classList.add('start');
+    setStatus(`Wiring (net ${activeNet}). Click corners or another pad/connection point. Esc to cancel.`);
+  }
+  function addWireCorner(p) {
+    const last = wireActive.points[wireActive.points.length - 1];
+    // L-route from last to p (horizontal then vertical)
+    if (p.x !== last.x) wireActive.points.push({ x: p.x, y: last.y });
+    if (p.y !== last.y) wireActive.points.push({ x: p.x, y: p.y });
+  }
+  function finishWire(endRef, endPos) {
+    const last = wireActive.points[wireActive.points.length - 1];
+    if (endPos.x !== last.x) wireActive.points.push({ x: endPos.x, y: last.y });
+    if (endPos.y !== last.y) wireActive.points.push({ x: endPos.x, y: endPos.y });
+
+    const t = {
+      id: uid(),
+      net: activeNet,
+      points: wireActive.points.slice(),
+      endpoints: [wireActive.startRef, endRef],
+    };
+    traces.push(t); renderTrace(t);
+    if (wireActive.startEl) wireActive.startEl.classList.remove('start');
+    if (wireActive.previewEl) wireActive.previewEl.remove();
+    wireActive = null;
+    updateNetlist();
+    setStatus('Trace placed.');
+  }
+  function updateWirePreview(p) {
+    if (!wireActive) return;
+    if (wireActive.previewEl) wireActive.previewEl.remove();
+    const pts = wireActive.points.slice();
+    const last = pts[pts.length - 1];
+    if (p.x !== last.x) pts.push({ x: p.x, y: last.y });
+    if (p.y !== last.y) pts.push({ x: p.x, y: p.y });
+    const d = 'M ' + pts.map(q => `${q.x} ${q.y}`).join(' L ');
+    const path = document.createElementNS(SVGNS, 'path');
+    path.setAttribute('class', 'trace preview');
+    path.setAttribute('d', d);
+    path.setAttribute('stroke', netColor(activeNet));
+    path.setAttribute('stroke-width', '3');
+    overlay.appendChild(path);
+    wireActive.previewEl = path;
+  }
+  function cancelWire() {
+    if (!wireActive) return;
+    if (wireActive.startEl) wireActive.startEl.classList.remove('start');
+    if (wireActive.previewEl) wireActive.previewEl.remove();
+    wireActive = null;
+  }
+
+  // ===== Keys =====
+  window.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT') return;
+    if (e.key === 'Escape') { cancelWire(); placingVp = false; setStatus('Cancelled.'); return; }
+    if (e.key.toLowerCase() === 'w') setTool('wire');
+    if (e.key.toLowerCase() === 's') setTool('select');
+    if (e.key === 'Delete' || e.key === 'Backspace') deleteSelected();
+    if (e.key.toLowerCase() === 'r' && selected && selected.kind === 'component') {
+      pushUndo();
+      const c = selected.thing;
+      c.rot = (c.rot + 90) % 360;
+      c.el.setAttribute('transform', `translate(${c.x},${c.y}) rotate(${c.rot})`);
+      rerouteForComponent(c);
+      selectComponent(c);
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
+  });
+
+  function deleteSelected() {
+    if (!selected) return;
+    pushUndo();
+    if (selected.kind === 'component') {
+      const c = selected.thing;
+      // remove traces attached
+      traces = traces.filter(t => {
+        const hit = t.endpoints.some(r => r && r.kind === 'pad' && r.compId === c.id);
+        if (hit) t.el.remove();
+        return !hit;
+      });
+      c.el.remove();
+      components = components.filter(x => x !== c);
+      renderMaterials();
+    } else if (selected.kind === 'trace') {
+      selected.thing.el.remove();
+      traces = traces.filter(t => t !== selected.thing);
+    } else if (selected.kind === 'vp') {
+      const v = selected.thing;
+      traces = traces.filter(t => {
+        const hit = t.endpoints.some(r => r && r.kind === 'vp' && r.vpId === v.id);
+        if (hit) t.el.remove();
+        return !hit;
+      });
+      v.el.remove();
+      vps = vps.filter(x => x !== v);
+    }
+    clearSelection(); updateNetlist();
+    setStatus('Deleted.');
+  }
+
+  function updateNetlist() {
+    if (!traces.length) { netlistDiv.innerHTML = 'No traces yet.'; return; }
+    const byNet = {};
+    traces.forEach(t => (byNet[t.net] = byNet[t.net] || []).push(t));
+    let html = '';
+    Object.entries(byNet).forEach(([n, ts]) => {
+      html += `<p><span class="net-pill" style="background:${netColor(n)};color:#fff">${n}</span> ${ts.length} trace${ts.length>1?'s':''}</p>`;
+      ts.forEach(t => {
+        const a = describeRef(t.endpoints[0]);
+        const b = describeRef(t.endpoints[1]);
+        html += `<p style="margin-left:10px;font-size:11px;color:#999">${a} ↔ ${b}</p>`;
+      });
+    });
+    netlistDiv.innerHTML = html;
+  }
+  function describeRef(r) {
+    if (!r) return '?';
+    if (r.kind === 'pad') {
+      const c = components.find(c => c.id === r.compId);
+      if (!c) return '?';
+      const pad = c.pads.find(p => p.id === r.padId);
+      return `${DEFS[c.type].label}#${c.id.replace('i','')}.${pad.name}`;
+    }
+    if (r.kind === 'vp') return `cp-${r.vpId.replace('i','')}`;
+    return '?';
+  }
+
+  // ===== Serialize / undo / export =====
+  function serialize() {
+    return JSON.parse(JSON.stringify({
+      nextId,
+      components: components.map(c => ({ id:c.id, type:c.type, materialId:c.materialId, x:c.x, y:c.y, rot:c.rot, pads:c.pads })),
+      vps: vps.map(v => ({ id:v.id, x:v.x, y:v.y, net:v.net })),
+      traces: traces.map(t => ({ id:t.id, net:t.net, points:t.points, endpoints:t.endpoints })),
+    }));
+  }
+  function restore(state) {
+    components.forEach(c => c.el.remove());
+    vps.forEach(v => v.el.remove());
+    traces.forEach(t => t.el.remove());
+    components = []; vps = []; traces = [];
+    nextId = state.nextId || 1;
+    state.components.forEach(c => { c.el = null; components.push(c); renderComponent(c); });
+    state.vps.forEach(v => { v.el = null; vps.push(v); renderVp(v); });
+    state.traces.forEach(t => { t.el = null; traces.push(t); renderTrace(t); });
+    renderMaterials(); updateNetlist(); clearSelection();
+  }
+  function undo() {
+    if (!undoStack.length) { setStatus('Nothing to undo.'); return; }
+    restore(undoStack.pop());
+    setStatus('Undone.');
+  }
+
+  document.getElementById('export-svg').addEventListener('click', () => {
+    const blob = new Blob([stage.outerHTML], { type: 'image/svg+xml' });
+    download(URL.createObjectURL(blob), 'pcb.svg');
+  });
+  document.getElementById('export-json').addEventListener('click', () => {
+    const blob = new Blob([JSON.stringify(serialize(), null, 2)], { type: 'application/json' });
+    download(URL.createObjectURL(blob), 'pcb.json');
+  });
+  document.getElementById('import-json').addEventListener('click', () => document.getElementById('file-input').click());
+  document.getElementById('file-input').addEventListener('change', e => {
+    const file = e.target.files[0]; if (!file) return;
+    file.text().then(txt => {
+      try { pushUndo(); restore(JSON.parse(txt)); setStatus('Loaded.'); }
+      catch (err) { alert('Invalid JSON'); }
+    });
+  });
+  function download(url, name) {
+    const a = document.createElement('a'); a.href = url; a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  setStatus('Ready. Drag a component onto the board to begin.');
+})();
+</script>
+</body>
+</html>
